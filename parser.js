@@ -98,7 +98,7 @@ function extractFirmName(text, usedLines) {
   return '';
 }
 
-function extractPersonName(text, usedLines) {
+function extractPersonName(text, usedLines, mobileCount) {
   const lines = splitLines(text);
 
   // Prefer a line with an explicit title (Mr./Dr./Shri etc.)
@@ -107,6 +107,23 @@ function extractPersonName(text, usedLines) {
     if (NAME_TITLE.test(line) && line.length <= 40) {
       usedLines.add(line);
       return line.replace(NAME_TITLE, '').trim();
+    }
+  }
+
+  // Multiple people sharing one card (e.g. "ARVIND JAIN AKHIL J. JAIN
+  // JITENDRA JAIN") often get OCR'd as one merged row when their columns
+  // sit on the same horizontal band. If we already found more than one
+  // mobile number, try splitting this row into that many names.
+  if (mobileCount > 1) {
+    for (const line of lines) {
+      if (usedLines.has(line)) continue;
+      if (isMultiNameLike(line)) {
+        const names = splitMultiName(line, mobileCount);
+        if (names) {
+          usedLines.add(line);
+          return names.join(', ');
+        }
+      }
     }
   }
 
@@ -145,6 +162,45 @@ function isNameLike(line) {
   return titleCaseWords.length >= Math.ceil(words.length * 0.6);
 }
 
+function isMultiNameLike(line) {
+  if (!line || line.length > 100) return false;
+  if (/\d/.test(line)) return false;
+  if (FIRM_KEYWORDS.test(line)) return false;
+  if (ADDRESS_KEYWORDS.test(line) || INDIAN_STATES.test(line)) return false;
+  if (/@/.test(line)) return false;
+  const words = line.split(' ').filter(Boolean);
+  if (words.length < 5) return false; // a single name is handled by isNameLike
+  const titleCaseWords = words.filter(w => /^[A-Z][a-zA-Z.]*$/.test(w));
+  return titleCaseWords.length >= Math.ceil(words.length * 0.7);
+}
+
+// Splits a merged multi-person row into `count` names, using the number of
+// mobile numbers already found as the expected count. A single-letter
+// initial (e.g. "J.") is glued to the following word before splitting, so
+// "AKHIL J. JAIN" isn't cut in half. Only returns a result when the
+// remaining word count divides evenly — otherwise it's too ambiguous to
+// guess, and the raw text is still visible for the user to fix by hand.
+function splitMultiName(line, count) {
+  if (count < 2) return null;
+  const tokens = line.split(' ').filter(Boolean);
+  const merged = [];
+  for (let i = 0; i < tokens.length; i++) {
+    if (/^[A-Z]\.$/.test(tokens[i]) && i + 1 < tokens.length) {
+      merged.push(tokens[i] + ' ' + tokens[i + 1]);
+      i++;
+    } else {
+      merged.push(tokens[i]);
+    }
+  }
+  if (merged.length < count * 2 || merged.length % count !== 0) return null;
+  const groupSize = merged.length / count;
+  const names = [];
+  for (let i = 0; i < merged.length; i += groupSize) {
+    names.push(merged.slice(i, i + groupSize).join(' '));
+  }
+  return names;
+}
+
 function parseCardText(frontText, backText) {
   const combined = [frontText || '', backText || ''].filter(Boolean).join('\n');
   const usedLines = new Set();
@@ -158,7 +214,7 @@ function parseCardText(frontText, backText) {
   });
 
   const firmName = extractFirmName(combined, usedLines);
-  const personName = extractPersonName(combined, usedLines);
+  const personName = extractPersonName(combined, usedLines, mobiles.length);
   const address = extractAddress(combined, usedLines);
 
   return {

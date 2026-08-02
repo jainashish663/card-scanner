@@ -205,6 +205,11 @@ async function getWorker() {
       60000,
       'Timed out starting the OCR engine. Check your internet connection and try again.'
     );
+    // PSM 4: single column of text of variable sizes — matches the
+    // stacked, mixed-font-size layout of a typical business card far
+    // better than the fully-automatic default, which was dropping
+    // large heading-style lines (e.g. the firm name).
+    await ocrWorker.setParameters({ tessedit_pageseg_mode: '4' });
   }
   return ocrWorker;
 }
