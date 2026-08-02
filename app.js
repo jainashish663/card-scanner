@@ -68,30 +68,75 @@ async function dbDelete(id) {
 }
 
 // ---------- Image capture helpers ----------
-function compressImageFile(file, maxDim = 1400, quality = 0.82) {
+function loadImageFromFile(file) {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onload = () => {
       const img = new Image();
-      img.onload = () => {
-        let { width, height } = img;
-        if (width > maxDim || height > maxDim) {
-          const scale = maxDim / Math.max(width, height);
-          width = Math.round(width * scale);
-          height = Math.round(height * scale);
-        }
-        const canvas = document.createElement('canvas');
-        canvas.width = width;
-        canvas.height = height;
-        const ctx = canvas.getContext('2d');
-        ctx.drawImage(img, 0, 0, width, height);
-        resolve(canvas.toDataURL('image/jpeg', quality));
-      };
+      img.onload = () => resolve(img);
       img.onerror = reject;
       img.src = reader.result;
     };
     reader.onerror = reject;
     reader.readAsDataURL(file);
+  });
+}
+
+function drawScaled(img, maxDim) {
+  let { width, height } = img;
+  if (width > maxDim || height > maxDim) {
+    const scale = maxDim / Math.max(width, height);
+    width = Math.round(width * scale);
+    height = Math.round(height * scale);
+  }
+  const canvas = document.createElement('canvas');
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext('2d');
+  ctx.drawImage(img, 0, 0, width, height);
+  return { canvas, ctx, width, height };
+}
+
+// Smaller, JPEG-compressed copy — this is what gets stored and shown.
+function compressImageFile(file, maxDim = 1400, quality = 0.82) {
+  return loadImageFromFile(file).then((img) => drawScaled(img, maxDim).canvas.toDataURL('image/jpeg', quality));
+}
+
+// Separate, OCR-friendly rendering of the same photo: kept at a higher
+// resolution than the stored copy (small text at the edge of a hand-held
+// card was being lost to downscaling), converted to greyscale, and
+// contrast-stretched so print still reads clearly under the uneven
+// lighting and shadow typical of a phone snapshot.
+function preprocessForOcr(file, maxDim = 2200) {
+  return loadImageFromFile(file).then((img) => {
+    const { canvas, ctx, width, height } = drawScaled(img, maxDim);
+    const imageData = ctx.getImageData(0, 0, width, height);
+    const px = imageData.data;
+
+    const grey = new Uint8ClampedArray(width * height);
+    const histogram = new Uint32Array(256);
+    for (let i = 0, g = 0; i < px.length; i += 4, g++) {
+      const v = (px[i] * 0.299 + px[i + 1] * 0.587 + px[i + 2] * 0.114) | 0;
+      grey[g] = v;
+      histogram[v]++;
+    }
+
+    // Clip the darkest and lightest 1% before stretching, so a single
+    // bright highlight or dark shadow can't flatten the rest of the range.
+    const total = width * height;
+    const clip = Math.max(1, Math.floor(total * 0.01));
+    let low = 0, high = 255, acc = 0;
+    for (let v = 0; v < 256; v++) { acc += histogram[v]; if (acc > clip) { low = v; break; } }
+    acc = 0;
+    for (let v = 255; v >= 0; v--) { acc += histogram[v]; if (acc > clip) { high = v; break; } }
+    const range = Math.max(1, high - low);
+
+    for (let i = 0, g = 0; i < px.length; i += 4, g++) {
+      const v = Math.max(0, Math.min(255, ((grey[g] - low) * 255) / range));
+      px[i] = px[i + 1] = px[i + 2] = v;
+    }
+    ctx.putImageData(imageData, 0, 0);
+    return canvas.toDataURL('image/png');
   });
 }
 
@@ -119,6 +164,10 @@ document.querySelectorAll('.back-btn').forEach(btn => {
 // ---------- Scan screen state ----------
 let frontDataUrl = null;
 let backDataUrl = null;
+// Higher-resolution, contrast-boosted renderings used only for OCR — the
+// stored/displayed images stay compressed.
+let frontOcrUrl = null;
+let backOcrUrl = null;
 let ocrWorker = null;
 
 const frontInput = document.getElementById('front-input');
@@ -130,6 +179,8 @@ const btnExtract = document.getElementById('btn-extract');
 function resetScanScreen() {
   frontDataUrl = null;
   backDataUrl = null;
+  frontOcrUrl = null;
+  backOcrUrl = null;
   frontPreview.hidden = true;
   backPreview.hidden = true;
   frontPreview.removeAttribute('src');
@@ -152,6 +203,7 @@ frontInput.addEventListener('change', async () => {
   const file = frontInput.files[0];
   if (!file) return;
   frontDataUrl = await compressImageFile(file);
+  frontOcrUrl = await preprocessForOcr(file);
   frontPreview.src = frontDataUrl;
   frontPreview.hidden = false;
   document.getElementById('front-box').querySelector('.capture-placeholder').hidden = true;
@@ -162,6 +214,7 @@ backInput.addEventListener('change', async () => {
   const file = backInput.files[0];
   if (!file) return;
   backDataUrl = await compressImageFile(file);
+  backOcrUrl = await preprocessForOcr(file);
   backPreview.src = backDataUrl;
   backPreview.hidden = false;
   document.getElementById('back-box').querySelector('.capture-placeholder').hidden = true;
@@ -231,10 +284,10 @@ btnExtract.addEventListener('click', async () => {
   setProgress(0, ocrWorker ? 'Preparing…' : 'Downloading OCR engine (~5MB, first time only)…');
 
   try {
-    const frontText = await runOcr(frontDataUrl);
+    const frontText = await runOcr(frontOcrUrl || frontDataUrl);
     let backText = '';
     if (backDataUrl) {
-      backText = await runOcr(backDataUrl);
+      backText = await runOcr(backOcrUrl || backDataUrl);
     }
     const parsed = parseCardText(frontText, backText);
     openFormScreen({ mode: 'new', parsed, front: frontDataUrl, back: backDataUrl });

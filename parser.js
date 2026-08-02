@@ -10,6 +10,12 @@ const DESIGNATION_KEYWORDS = /\b(proprietor|director|manager|partner|founder|own
 
 const NAME_TITLE = /^(mr|mrs|ms|miss|dr|shri|smt|er|adv|cs|ca)\.?\s+/i;
 
+// Words that show up in taglines and trade descriptions but never in a
+// person's name. A line containing any of these is not a name — without this
+// a tagline like "SPECIALIST FOR CZ LIGHT WEIGHT JEWELLERY" can be mistaken
+// for a row of several people and sliced into fragments.
+const DESCRIPTOR_WORDS = /\b(specialists?|manufacturers?|dealers?|wholesalers?|retailers?|suppliers?|exporters?|importers?|stockists?|distributors?|jewell?ery|jewell?ry|ornaments?|designs?|designer|collections?|quality|light|weight|gold|silver|diamond|platinum|antique|bridal|fancy|assorted|items?|types?|kinds?|varieties|for|and)\b/i;
+
 const ADDRESS_KEYWORDS = /\b(road|rd\.?|street|st\.?|marg|nagar|chowk|colony|sector|floor|fl\.?|building|bldg|opp\.?|opposite|near|city|dist(?:rict)?|tal(?:uka)?|state|pin\s*code|po\s*box|plot|shop\s*no|gala\s*no|lane|society|apartment|apt\.?|complex|market|chamber|estate)\b/i;
 
 const INDIAN_STATES = /\b(maharashtra|gujarat|rajasthan|delhi|karnataka|tamil\s*nadu|kerala|telangana|andhra\s*pradesh|west\s*bengal|punjab|haryana|madhya\s*pradesh|uttar\s*pradesh|bihar|odisha|assam|goa|jharkhand|chhattisgarh|uttarakhand|himachal\s*pradesh|mumbai|pune|surat|jaipur|ahmedabad|bangalore|bengaluru|chennai|kolkata|hyderabad)\b/i;
@@ -120,6 +126,22 @@ function extractPersonNames(text, usedLines, mobileCount) {
     }
   }
 
+  // The same people may instead come through as one name per line, when OCR
+  // reads the columns top-to-bottom rather than across. Only gather several
+  // when the card carries more than one number — on a single-contact card an
+  // extra name-like line is more likely a tagline than a second person.
+  if (mobileCount > 1) {
+    const collected = [];
+    for (const line of lines) {
+      if (usedLines.has(line)) continue;
+      if (isNameLike(line)) collected.push(line);
+    }
+    if (collected.length > 1) {
+      collected.forEach(l => usedLines.add(l));
+      return collected;
+    }
+  }
+
   // Prefer a line with an explicit title (Mr./Dr./Shri etc.)
   for (const line of lines) {
     if (usedLines.has(line)) continue;
@@ -156,6 +178,7 @@ function isNameLike(line) {
   if (!line || line.length > 40) return false;
   if (/\d/.test(line)) return false;
   if (FIRM_KEYWORDS.test(line)) return false;
+  if (DESCRIPTOR_WORDS.test(line)) return false;
   if (ADDRESS_KEYWORDS.test(line) || INDIAN_STATES.test(line)) return false;
   if (/@/.test(line)) return false;
   const words = line.split(' ').filter(Boolean);
@@ -168,6 +191,7 @@ function isMultiNameLike(line) {
   if (!line || line.length > 100) return false;
   if (/\d/.test(line)) return false;
   if (FIRM_KEYWORDS.test(line)) return false;
+  if (DESCRIPTOR_WORDS.test(line)) return false;
   if (ADDRESS_KEYWORDS.test(line) || INDIAN_STATES.test(line)) return false;
   if (/@/.test(line)) return false;
   const words = line.split(' ').filter(Boolean);
@@ -206,13 +230,15 @@ function splitMultiName(line, count) {
   const bySurname = splitBySharedSurname(merged);
   if (bySurname && bySurname.length >= 2) return bySurname;
 
+  // Even division is a weaker signal than a repeated surname, so only accept
+  // it when every resulting group still reads like a name on its own.
   if (count >= 2 && merged.length >= count * 2 && merged.length % count === 0) {
     const groupSize = merged.length / count;
     const names = [];
     for (let i = 0; i < merged.length; i += groupSize) {
       names.push(merged.slice(i, i + groupSize).join(' '));
     }
-    return names;
+    if (names.every(isNameLike)) return names;
   }
 
   return null;
@@ -277,15 +303,20 @@ function parseCardText(frontText, backText) {
   const names = extractPersonNames(combined, usedLines, mobiles.length);
   const address = extractAddress(combined, usedLines);
 
-  // One contact row per person, so each becomes its own saved card. The row
-  // count is driven by whichever we found more of — names or numbers — and
-  // they're paired up in reading order. Never merge several people into one
-  // row: an unpaired name or number is easier to fix in an otherwise-correct
-  // row than to untangle from a combined blob.
-  const rowCount = Math.max(names.length, mobiles.length, 1);
+  // One contact row per person, so each becomes its own saved card. With
+  // several people the rows are paired up in reading order and never merged
+  // — an unpaired name or number is easier to fix in an otherwise-correct
+  // row than to untangle from a combined blob. With at most one name, extra
+  // numbers are treated as that one person's alternates rather than as
+  // separate people.
   const contacts = [];
-  for (let i = 0; i < rowCount; i++) {
-    contacts.push({ name: names[i] || '', mobile: mobiles[i] || '' });
+  if (names.length > 1) {
+    const rowCount = Math.max(names.length, mobiles.length);
+    for (let i = 0; i < rowCount; i++) {
+      contacts.push({ name: names[i] || '', mobile: mobiles[i] || '' });
+    }
+  } else {
+    contacts.push({ name: names[0] || '', mobile: mobiles.join(' / ') });
   }
 
   return {
