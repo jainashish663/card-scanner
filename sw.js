@@ -1,4 +1,4 @@
-const CACHE_NAME = 'card-scanner-v3';
+const CACHE_NAME = 'card-scanner-v4';
 const APP_SHELL = [
   './',
   './index.html',
@@ -12,7 +12,9 @@ const APP_SHELL = [
 
 self.addEventListener('install', (event) => {
   event.waitUntil(
-    caches.open(CACHE_NAME).then((cache) => cache.addAll(APP_SHELL))
+    caches.open(CACHE_NAME).then((cache) =>
+      Promise.all(APP_SHELL.map((url) => fetch(url, { cache: 'reload' }).then((res) => cache.put(url, res))))
+    )
   );
   self.skipWaiting();
 });
