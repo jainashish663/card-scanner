@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>Card Scanner</title>
+<meta name="theme-color" content="#1b6e5c" />
+<link rel="manifest" href="manifest.json" />
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<link rel="stylesheet" href="style.css" />
+</head>
+<body>
+
+<div id="toast" class="toast" hidden></div>
+
+<!-- HOME -->
+<section id="screen-home" class="screen active">
+  <header class="topbar">
+    <h1>Card Scanner</h1>
+  </header>
+  <div class="content">
+    <input id="search-input" class="search-input" type="search" placeholder="Search by name, firm, or number" />
+    <div id="empty-state" class="empty-state" hidden>
+      <p>No cards saved yet.</p>
+      <p class="muted">Tap "Scan New Card" to get started.</p>
+    </div>
+    <ul id="card-list" class="card-list"></ul>
+  </div>
+  <button id="btn-new-scan" class="fab">+ Scan New Card</button>
+</section>
+
+<!-- SCAN -->
+<section id="screen-scan" class="screen">
+  <header class="topbar">
+    <button class="icon-btn back-btn" data-target="screen-home" aria-label="Back">&larr;</button>
+    <h1>Scan Card</h1>
+  </header>
+  <div class="content">
+    <div class="capture-row">
+      <div class="capture-slot">
+        <div class="capture-label">Front <span class="req">(required)</span></div>
+        <label class="capture-box" id="front-box">
+          <img id="front-preview" hidden />
+          <span class="capture-placeholder">Tap to take photo</span>
+          <input id="front-input" type="file" accept="image/*" capture="environment" hidden />
+        </label>
+      </div>
+      <div class="capture-slot">
+        <div class="capture-label">Back <span class="muted">(optional)</span></div>
+        <label class="capture-box" id="back-box">
+          <img id="back-preview" hidden />
+          <span class="capture-placeholder">Tap to take photo</span>
+          <input id="back-input" type="file" accept="image/*" capture="environment" hidden />
+        </label>
+      </div>
+    </div>
+
+    <button id="btn-extract" class="primary-btn" disabled>Extract Info</button>
+
+    <div id="ocr-progress" class="ocr-progress" hidden>
+      <div class="progress-bar"><div id="progress-fill" class="progress-fill"></div></div>
+      <p id="progress-label" class="muted">Preparing…</p>
+    </div>
+  </div>
+</section>
+
+<!-- REVIEW / DETAIL (shared form) -->
+<section id="screen-form" class="screen">
+  <header class="topbar">
+    <button class="icon-btn back-btn" data-target="screen-home" aria-label="Back">&larr;</button>
+    <h1 id="form-title">Review Card</h1>
+  </header>
+  <div class="content">
+    <div class="thumb-row" id="form-thumbs"></div>
+
+    <label class="field-label">Firm / Company Name</label>
+    <input id="field-firm" class="field-input" type="text" placeholder="e.g. Shree Nakoda Jewels" />
+
+    <label class="field-label">Name</label>
+    <input id="field-name" class="field-input" type="text" placeholder="e.g. Ashish Jain" />
+
+    <label class="field-label">Mobile Number</label>
+    <input id="field-mobile" class="field-input" type="tel" placeholder="e.g. 98765 43210" />
+
+    <label class="field-label">Address</label>
+    <textarea id="field-address" class="field-textarea" rows="4" placeholder="Full address"></textarea>
+
+    <details class="raw-text-details">
+      <summary>Raw scanned text (for reference)</summary>
+      <pre id="raw-text" class="raw-text"></pre>
+    </details>
+
+    <div class="form-actions">
+      <button id="btn-save" class="primary-btn">Save Card</button>
+      <button id="btn-delete" class="danger-btn" hidden>Delete Card</button>
+    </div>
+  </div>
+</section>
+
+<script src="https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js"></script>
+<script src="parser.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

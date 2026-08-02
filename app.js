@@ -1,0 +1,385 @@
+// ---------- IndexedDB storage ----------
+const DB_NAME = 'cardScannerDB';
+const DB_VERSION = 1;
+const STORE = 'cards';
+
+function openDB() {
+  return new Promise((resolve, reject) => {
+    const req = indexedDB.open(DB_NAME, DB_VERSION);
+    req.onupgradeneeded = () => {
+      const db = req.result;
+      if (!db.objectStoreNames.contains(STORE)) {
+        db.createObjectStore(STORE, { keyPath: 'id', autoIncrement: true });
+      }
+    };
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+}
+
+async function dbAdd(record) {
+  const db = await openDB();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(STORE, 'readwrite');
+    const req = tx.objectStore(STORE).add(record);
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+}
+
+async function dbPut(record) {
+  const db = await openDB();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(STORE, 'readwrite');
+    const req = tx.objectStore(STORE).put(record);
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+}
+
+async function dbGetAll() {
+  const db = await openDB();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(STORE, 'readonly');
+    const req = tx.objectStore(STORE).getAll();
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+}
+
+async function dbGet(id) {
+  const db = await openDB();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(STORE, 'readonly');
+    const req = tx.objectStore(STORE).get(id);
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+}
+
+async function dbDelete(id) {
+  const db = await openDB();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(STORE, 'readwrite');
+    const req = tx.objectStore(STORE).delete(id);
+    req.onsuccess = () => resolve();
+    req.onerror = () => reject(req.error);
+  });
+}
+
+// ---------- Image capture helpers ----------
+function compressImageFile(file, maxDim = 1400, quality = 0.82) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const img = new Image();
+      img.onload = () => {
+        let { width, height } = img;
+        if (width > maxDim || height > maxDim) {
+          const scale = maxDim / Math.max(width, height);
+          width = Math.round(width * scale);
+          height = Math.round(height * scale);
+        }
+        const canvas = document.createElement('canvas');
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(img, 0, 0, width, height);
+        resolve(canvas.toDataURL('image/jpeg', quality));
+      };
+      img.onerror = reject;
+      img.src = reader.result;
+    };
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+}
+
+// ---------- Toast ----------
+let toastTimer = null;
+function showToast(msg) {
+  const el = document.getElementById('toast');
+  el.textContent = msg;
+  el.hidden = false;
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => { el.hidden = true; }, 2200);
+}
+
+// ---------- Screen navigation ----------
+function showScreen(id) {
+  document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
+  document.getElementById(id).classList.add('active');
+  window.scrollTo(0, 0);
+}
+
+document.querySelectorAll('.back-btn').forEach(btn => {
+  btn.addEventListener('click', () => showScreen(btn.dataset.target));
+});
+
+// ---------- Scan screen state ----------
+let frontDataUrl = null;
+let backDataUrl = null;
+let ocrWorker = null;
+
+const frontInput = document.getElementById('front-input');
+const backInput = document.getElementById('back-input');
+const frontPreview = document.getElementById('front-preview');
+const backPreview = document.getElementById('back-preview');
+const btnExtract = document.getElementById('btn-extract');
+
+function resetScanScreen() {
+  frontDataUrl = null;
+  backDataUrl = null;
+  frontPreview.hidden = true;
+  backPreview.hidden = true;
+  frontPreview.removeAttribute('src');
+  backPreview.removeAttribute('src');
+  frontInput.value = '';
+  backInput.value = '';
+  document.getElementById('front-box').querySelector('.capture-placeholder').hidden = false;
+  document.getElementById('back-box').querySelector('.capture-placeholder').hidden = false;
+  btnExtract.disabled = true;
+  document.getElementById('ocr-progress').hidden = true;
+  setProgress(0, 'Preparing…');
+}
+
+document.getElementById('btn-new-scan').addEventListener('click', () => {
+  resetScanScreen();
+  showScreen('screen-scan');
+});
+
+frontInput.addEventListener('change', async () => {
+  const file = frontInput.files[0];
+  if (!file) return;
+  frontDataUrl = await compressImageFile(file);
+  frontPreview.src = frontDataUrl;
+  frontPreview.hidden = false;
+  document.getElementById('front-box').querySelector('.capture-placeholder').hidden = true;
+  btnExtract.disabled = !frontDataUrl;
+});
+
+backInput.addEventListener('change', async () => {
+  const file = backInput.files[0];
+  if (!file) return;
+  backDataUrl = await compressImageFile(file);
+  backPreview.src = backDataUrl;
+  backPreview.hidden = false;
+  document.getElementById('back-box').querySelector('.capture-placeholder').hidden = true;
+});
+
+// ---------- OCR ----------
+function setProgress(pct, label) {
+  document.getElementById('progress-fill').style.width = `${Math.round(pct * 100)}%`;
+  document.getElementById('progress-label').textContent = label;
+}
+
+function friendlyStatus(status) {
+  const map = {
+    'loading tesseract core': 'Loading OCR engine…',
+    'initializing tesseract': 'Starting OCR engine…',
+    'loading language traineddata': 'Downloading language data…',
+    'initializing api': 'Initializing…',
+    'recognizing text': 'Reading text…',
+  };
+  return map[status] || status;
+}
+
+async function getWorker() {
+  if (!ocrWorker) {
+    ocrWorker = await Tesseract.createWorker('eng', 1, {
+      logger: (m) => {
+        if (typeof m.progress === 'number') {
+          setProgress(m.progress, friendlyStatus(m.status));
+        }
+      },
+    });
+  }
+  return ocrWorker;
+}
+
+async function runOcr(dataUrl) {
+  const worker = await getWorker();
+  const { data } = await worker.recognize(dataUrl);
+  return data.text || '';
+}
+
+btnExtract.addEventListener('click', async () => {
+  if (!frontDataUrl) return;
+  btnExtract.disabled = true;
+  document.getElementById('ocr-progress').hidden = false;
+  setProgress(0, 'Preparing…');
+
+  try {
+    const frontText = await runOcr(frontDataUrl);
+    let backText = '';
+    if (backDataUrl) {
+      backText = await runOcr(backDataUrl);
+    }
+    const parsed = parseCardText(frontText, backText);
+    openFormScreen({ mode: 'new', parsed, front: frontDataUrl, back: backDataUrl });
+  } catch (err) {
+    console.error(err);
+    showToast('OCR failed — check your connection and try again.');
+  } finally {
+    btnExtract.disabled = false;
+    document.getElementById('ocr-progress').hidden = true;
+  }
+});
+
+// ---------- Form (review new / edit existing) ----------
+let formMode = 'new'; // 'new' | 'edit'
+let editingCardId = null;
+let formFrontImage = null;
+let formBackImage = null;
+
+const fieldFirm = document.getElementById('field-firm');
+const fieldName = document.getElementById('field-name');
+const fieldMobile = document.getElementById('field-mobile');
+const fieldAddress = document.getElementById('field-address');
+const rawTextEl = document.getElementById('raw-text');
+const formThumbs = document.getElementById('form-thumbs');
+const btnDelete = document.getElementById('btn-delete');
+
+function openFormScreen({ mode, parsed, front, back, id }) {
+  formMode = mode;
+  editingCardId = id ?? null;
+  formFrontImage = front || null;
+  formBackImage = back || null;
+
+  document.getElementById('form-title').textContent = mode === 'edit' ? 'Edit Card' : 'Review Card';
+  btnDelete.hidden = mode !== 'edit';
+
+  fieldFirm.value = parsed.firmName || '';
+  fieldName.value = parsed.personName || '';
+  fieldMobile.value = parsed.mobile || '';
+  fieldAddress.value = parsed.address || '';
+  rawTextEl.textContent = parsed.rawText || '(no raw text)';
+
+  formThumbs.innerHTML = '';
+  if (formFrontImage) {
+    const img = document.createElement('img');
+    img.src = formFrontImage;
+    formThumbs.appendChild(img);
+  }
+  if (formBackImage) {
+    const img = document.createElement('img');
+    img.src = formBackImage;
+    formThumbs.appendChild(img);
+  }
+
+  showScreen('screen-form');
+}
+
+document.getElementById('btn-save').addEventListener('click', async () => {
+  const firmName = fieldFirm.value.trim();
+  const personName = fieldName.value.trim();
+  const mobile = fieldMobile.value.trim();
+  const address = fieldAddress.value.trim();
+
+  if (!firmName && !personName && !mobile) {
+    showToast('Add at least a name, firm, or mobile number.');
+    return;
+  }
+
+  const now = new Date().toISOString();
+
+  if (formMode === 'edit' && editingCardId != null) {
+    const existing = await dbGet(editingCardId);
+    await dbPut({
+      ...existing,
+      firmName, personName, mobile, address,
+      updatedAt: now,
+    });
+    showToast('Card updated');
+  } else {
+    await dbAdd({
+      firmName, personName, mobile, address,
+      rawText: rawTextEl.textContent,
+      frontImage: formFrontImage,
+      backImage: formBackImage,
+      createdAt: now,
+      updatedAt: now,
+    });
+    showToast('Card saved');
+  }
+
+  showScreen('screen-home');
+  renderCardList(document.getElementById('search-input').value);
+});
+
+btnDelete.addEventListener('click', async () => {
+  if (editingCardId == null) return;
+  if (!confirm('Delete this card? This cannot be undone.')) return;
+  await dbDelete(editingCardId);
+  showToast('Card deleted');
+  showScreen('screen-home');
+  renderCardList(document.getElementById('search-input').value);
+});
+
+// ---------- Home / list ----------
+const cardListEl = document.getElementById('card-list');
+const emptyStateEl = document.getElementById('empty-state');
+
+async function renderCardList(filter = '') {
+  const all = await dbGetAll();
+  all.sort((a, b) => (b.updatedAt || '').localeCompare(a.updatedAt || ''));
+
+  const q = filter.trim().toLowerCase();
+  const filtered = q
+    ? all.filter(c =>
+        (c.firmName || '').toLowerCase().includes(q) ||
+        (c.personName || '').toLowerCase().includes(q) ||
+        (c.mobile || '').toLowerCase().includes(q))
+    : all;
+
+  cardListEl.innerHTML = '';
+  emptyStateEl.hidden = all.length > 0;
+
+  filtered.forEach(card => {
+    const li = document.createElement('li');
+    li.className = 'card-item';
+    li.innerHTML = `
+      ${card.frontImage ? `<img src="${card.frontImage}" alt="">` : '<img alt="">'}
+      <div class="card-item-text">
+        <div class="firm">${escapeHtml(card.firmName || 'Untitled')}</div>
+        <div class="name">${escapeHtml(card.personName || '')}</div>
+        <div class="mobile">${escapeHtml(card.mobile || '')}</div>
+      </div>
+    `;
+    li.addEventListener('click', () => {
+      openFormScreen({
+        mode: 'edit',
+        id: card.id,
+        parsed: {
+          firmName: card.firmName,
+          personName: card.personName,
+          mobile: card.mobile,
+          address: card.address,
+          rawText: card.rawText,
+        },
+        front: card.frontImage,
+        back: card.backImage,
+      });
+    });
+    cardListEl.appendChild(li);
+  });
+}
+
+function escapeHtml(str) {
+  const div = document.createElement('div');
+  div.textContent = str;
+  return div.innerHTML;
+}
+
+document.getElementById('search-input').addEventListener('input', (e) => {
+  renderCardList(e.target.value);
+});
+
+// ---------- Init ----------
+renderCardList();
+
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('sw.js').catch(() => {});
+  });
+}
