@@ -310,6 +310,8 @@ const fieldFirm = document.getElementById('field-firm');
 const fieldName = document.getElementById('field-name');
 const fieldMobile = document.getElementById('field-mobile');
 const fieldAddress = document.getElementById('field-address');
+const fieldCity = document.getElementById('field-city');
+const fieldState = document.getElementById('field-state');
 const fieldEmail = document.getElementById('field-email');
 const fieldInstagram = document.getElementById('field-instagram');
 const rawTextEl = document.getElementById('raw-text');
@@ -360,6 +362,8 @@ function openFormScreen({ mode, parsed, front, back, id }) {
 
   fieldFirm.value = parsed.firmName || '';
   fieldAddress.value = parsed.address || '';
+  fieldCity.value = parsed.city || '';
+  fieldState.value = parsed.state || '';
   fieldEmail.value = parsed.email || '';
   fieldInstagram.value = parsed.instagram || '';
   rawTextEl.textContent = parsed.rawText || '(no raw text)';
@@ -393,6 +397,8 @@ function openFormScreen({ mode, parsed, front, back, id }) {
 document.getElementById('btn-save').addEventListener('click', async () => {
   const firmName = fieldFirm.value.trim();
   const address = fieldAddress.value.trim();
+  const city = fieldCity.value.trim();
+  const state = fieldState.value.trim();
   const email = fieldEmail.value.trim();
   const instagram = fieldInstagram.value.trim();
   const now = new Date().toISOString();
@@ -407,7 +413,7 @@ document.getElementById('btn-save').addEventListener('click', async () => {
     const existing = await dbGet(editingCardId);
     await dbPut({
       ...existing,
-      firmName, personName, mobile, address, email, instagram,
+      firmName, personName, mobile, address, city, state, email, instagram,
       updatedAt: now,
     });
     showToast('Card updated');
@@ -427,7 +433,7 @@ document.getElementById('btn-save').addEventListener('click', async () => {
 
     for (const entry of entries) {
       await dbAdd({
-        firmName, personName: entry.personName, mobile: entry.mobile, address, email, instagram,
+        firmName, personName: entry.personName, mobile: entry.mobile, address, city, state, email, instagram,
         rawText: rawTextEl.textContent,
         frontImage: formFrontImage,
         backImage: formBackImage,
@@ -490,6 +496,8 @@ async function renderCardList(filter = '') {
           personName: card.personName,
           mobile: card.mobile,
           address: card.address,
+          city: card.city,
+          state: card.state,
           email: card.email,
           instagram: card.instagram,
           rawText: card.rawText,
@@ -526,13 +534,15 @@ document.getElementById('btn-export').addEventListener('click', async () => {
     'Name': c.personName || '',
     'Mobile Number': c.mobile || '',
     'Address': c.address || '',
+    'City': c.city || '',
+    'State': c.state || '',
     'Email': c.email || '',
     'Instagram': c.instagram || '',
     'Date Added': c.createdAt ? new Date(c.createdAt).toLocaleDateString() : '',
   }));
 
   const ws = XLSX.utils.json_to_sheet(rows);
-  ws['!cols'] = [{ wch: 28 }, { wch: 22 }, { wch: 18 }, { wch: 40 }, { wch: 26 }, { wch: 20 }, { wch: 14 }];
+  ws['!cols'] = [{ wch: 28 }, { wch: 22 }, { wch: 18 }, { wch: 40 }, { wch: 16 }, { wch: 16 }, { wch: 26 }, { wch: 20 }, { wch: 14 }];
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, 'Business Cards');
   XLSX.writeFile(wb, `business-cards-${new Date().toISOString().slice(0, 10)}.xlsx`);

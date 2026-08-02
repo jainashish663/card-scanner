@@ -20,6 +20,92 @@ const ADDRESS_KEYWORDS = /\b(road|rd\.?|street|st\.?|marg|nagar|chowk|colony|sec
 
 const INDIAN_STATES = /\b(maharashtra|gujarat|rajasthan|delhi|karnataka|tamil\s*nadu|kerala|telangana|andhra\s*pradesh|west\s*bengal|punjab|haryana|madhya\s*pradesh|uttar\s*pradesh|bihar|odisha|assam|goa|jharkhand|chhattisgarh|uttarakhand|himachal\s*pradesh|mumbai|pune|surat|jaipur|ahmedabad|bangalore|bengaluru|chennai|kolkata|hyderabad)\b/i;
 
+// Canonical state names, used to fill the State column when the card spells
+// one out directly.
+const INDIAN_STATE_NAMES = [
+  'Maharashtra', 'Gujarat', 'Rajasthan', 'Delhi', 'Karnataka', 'Tamil Nadu', 'Kerala',
+  'Telangana', 'Andhra Pradesh', 'West Bengal', 'Punjab', 'Haryana', 'Madhya Pradesh',
+  'Uttar Pradesh', 'Bihar', 'Odisha', 'Assam', 'Goa', 'Jharkhand', 'Chhattisgarh',
+  'Uttarakhand', 'Himachal Pradesh', 'Tripura', 'Manipur', 'Meghalaya', 'Nagaland',
+  'Mizoram', 'Sikkim', 'Arunachal Pradesh', 'Chandigarh', 'Puducherry', 'Jammu and Kashmir', 'Ladakh',
+];
+
+// Major cities mapped to their state, so the State column can still be filled
+// in when a card only prints the city (very common — "Mumbai - 400002" with
+// no state, since the pincode already implies it to a local reader).
+const CITY_TO_STATE = {
+  mumbai: 'Maharashtra', pune: 'Maharashtra', nagpur: 'Maharashtra', nashik: 'Maharashtra',
+  thane: 'Maharashtra', aurangabad: 'Maharashtra', 'navi mumbai': 'Maharashtra',
+  surat: 'Gujarat', ahmedabad: 'Gujarat', vadodara: 'Gujarat', rajkot: 'Gujarat',
+  bhavnagar: 'Gujarat', jamnagar: 'Gujarat', junagadh: 'Gujarat',
+  jaipur: 'Rajasthan', jodhpur: 'Rajasthan', udaipur: 'Rajasthan', kota: 'Rajasthan',
+  ajmer: 'Rajasthan', bikaner: 'Rajasthan',
+  bangalore: 'Karnataka', bengaluru: 'Karnataka', mysore: 'Karnataka', mysuru: 'Karnataka', hubli: 'Karnataka',
+  chennai: 'Tamil Nadu', coimbatore: 'Tamil Nadu', madurai: 'Tamil Nadu',
+  trichy: 'Tamil Nadu', tiruchirapalli: 'Tamil Nadu', salem: 'Tamil Nadu',
+  kolkata: 'West Bengal', howrah: 'West Bengal', siliguri: 'West Bengal',
+  hyderabad: 'Telangana', secunderabad: 'Telangana',
+  delhi: 'Delhi', 'new delhi': 'Delhi',
+  kochi: 'Kerala', cochin: 'Kerala', thiruvananthapuram: 'Kerala', kozhikode: 'Kerala',
+  lucknow: 'Uttar Pradesh', kanpur: 'Uttar Pradesh', varanasi: 'Uttar Pradesh', agra: 'Uttar Pradesh',
+  noida: 'Uttar Pradesh', ghaziabad: 'Uttar Pradesh', meerut: 'Uttar Pradesh', allahabad: 'Uttar Pradesh',
+  patna: 'Bihar', gaya: 'Bihar',
+  bhopal: 'Madhya Pradesh', indore: 'Madhya Pradesh', gwalior: 'Madhya Pradesh', jabalpur: 'Madhya Pradesh',
+  chandigarh: 'Chandigarh',
+  guwahati: 'Assam',
+  bhubaneswar: 'Odisha', cuttack: 'Odisha',
+  ranchi: 'Jharkhand', jamshedpur: 'Jharkhand',
+  raipur: 'Chhattisgarh',
+  dehradun: 'Uttarakhand',
+  shimla: 'Himachal Pradesh',
+  panaji: 'Goa', margao: 'Goa', vasco: 'Goa',
+  amritsar: 'Punjab', ludhiana: 'Punjab', jalandhar: 'Punjab',
+  gurgaon: 'Haryana', gurugram: 'Haryana', faridabad: 'Haryana',
+  vijayawada: 'Andhra Pradesh', visakhapatnam: 'Andhra Pradesh', vizag: 'Andhra Pradesh', guntur: 'Andhra Pradesh',
+};
+
+function titleCase(s) {
+  return s.trim().toLowerCase().replace(/\b[a-z]/g, (c) => c.toUpperCase());
+}
+
+// City and State are pulled from the already-extracted address, not the raw
+// text — that keeps a state name mentioned elsewhere on the card (unlikely,
+// but taglines are unpredictable) from being picked up by mistake.
+function extractCityState(address) {
+  if (!address) return { city: '', state: '' };
+
+  let state = '';
+  for (const name of INDIAN_STATE_NAMES) {
+    const re = new RegExp('\\b' + name.replace(/ /g, '\\s+') + '\\b', 'i');
+    if (re.test(address)) { state = name; break; }
+  }
+
+  // Longest key first, so "Navi Mumbai" / "New Delhi" match in full instead
+  // of stopping at the shorter "Mumbai" / "Delhi" contained inside them.
+  let city = '';
+  const cityKeys = Object.keys(CITY_TO_STATE).sort((a, b) => b.length - a.length);
+  for (const key of cityKeys) {
+    const re = new RegExp('\\b' + key.replace(/ /g, '\\s+') + '\\b', 'i');
+    const m = address.match(re);
+    if (m) { city = titleCase(m[0]); break; }
+  }
+
+  // No known city matched — fall back to whatever word(s) sit directly
+  // before the pincode, e.g. "Kalbadevi Road, Mumbai - 400002" -> "Mumbai".
+  // The character class excludes ',', so it naturally stops at the previous
+  // address segment rather than swallowing the whole line.
+  if (!city) {
+    const m = address.match(/([A-Za-z][A-Za-z\s]{1,25})[\s,-]+\d{6}\b/);
+    if (m) city = titleCase(m[1]);
+  }
+
+  if (!state && city && CITY_TO_STATE[city.toLowerCase()]) {
+    state = CITY_TO_STATE[city.toLowerCase()];
+  }
+
+  return { city, state };
+}
+
 function splitLines(text) {
   return text
     .split(/\r?\n/)
@@ -380,6 +466,7 @@ function parseCardText(frontText, backText) {
   const firmName = extractFirmName(combined, usedLines);
   const names = extractPersonNames(combined, usedLines, mobiles.length);
   const address = extractAddress(combined, usedLines);
+  const { city, state } = extractCityState(address);
 
   // One contact row per person, so each becomes its own saved card. With
   // several people the rows are paired up in reading order and never merged
@@ -402,6 +489,8 @@ function parseCardText(frontText, backText) {
     personName: names.join(', '),
     mobile: mobiles.join(' / '),
     address,
+    city,
+    state,
     email,
     instagram,
     contacts,

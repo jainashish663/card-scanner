@@ -267,6 +267,15 @@ body {
   cursor: pointer;
 }
 
+.field-row {
+  display: flex;
+  gap: 12px;
+}
+.field-row > div {
+  flex: 1;
+  min-width: 0;
+}
+
 .ocr-progress {
   margin-top: 20px;
   text-align: center;
