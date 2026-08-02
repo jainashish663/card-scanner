@@ -260,6 +260,39 @@ const fieldAddress = document.getElementById('field-address');
 const rawTextEl = document.getElementById('raw-text');
 const formThumbs = document.getElementById('form-thumbs');
 const btnDelete = document.getElementById('btn-delete');
+const singleContactFields = document.getElementById('single-contact-fields');
+const multiContactFields = document.getElementById('multi-contact-fields');
+const contactsList = document.getElementById('contacts-list');
+const btnAddContact = document.getElementById('btn-add-contact');
+
+// A scanned card can hold more than one person (e.g. a firm listing
+// several people, each with their own number) — each row here becomes
+// its own saved card, sharing the firm name/address/photos.
+function createContactRow(name = '', mobile = '') {
+  const row = document.createElement('div');
+  row.className = 'contact-row';
+  row.innerHTML = `
+    <input class="field-input contact-name" type="text" placeholder="Name" />
+    <input class="field-input contact-mobile" type="tel" placeholder="Mobile number" />
+    <button type="button" class="remove-contact-btn" aria-label="Remove person">×</button>
+  `;
+  row.querySelector('.contact-name').value = name;
+  row.querySelector('.contact-mobile').value = mobile;
+  row.querySelector('.remove-contact-btn').addEventListener('click', () => {
+    if (contactsList.children.length > 1) row.remove();
+  });
+  return row;
+}
+
+function renderContactRows(contacts) {
+  contactsList.innerHTML = '';
+  const list = contacts && contacts.length ? contacts : [{ name: '', mobile: '' }];
+  list.forEach(c => contactsList.appendChild(createContactRow(c.name, c.mobile)));
+}
+
+btnAddContact.addEventListener('click', () => {
+  contactsList.appendChild(createContactRow());
+});
 
 function openFormScreen({ mode, parsed, front, back, id }) {
   formMode = mode;
@@ -271,10 +304,19 @@ function openFormScreen({ mode, parsed, front, back, id }) {
   btnDelete.hidden = mode !== 'edit';
 
   fieldFirm.value = parsed.firmName || '';
-  fieldName.value = parsed.personName || '';
-  fieldMobile.value = parsed.mobile || '';
   fieldAddress.value = parsed.address || '';
   rawTextEl.textContent = parsed.rawText || '(no raw text)';
+
+  if (mode === 'edit') {
+    singleContactFields.hidden = false;
+    multiContactFields.hidden = true;
+    fieldName.value = parsed.personName || '';
+    fieldMobile.value = parsed.mobile || '';
+  } else {
+    singleContactFields.hidden = true;
+    multiContactFields.hidden = false;
+    renderContactRows(parsed.contacts);
+  }
 
   formThumbs.innerHTML = '';
   if (formFrontImage) {
@@ -293,18 +335,16 @@ function openFormScreen({ mode, parsed, front, back, id }) {
 
 document.getElementById('btn-save').addEventListener('click', async () => {
   const firmName = fieldFirm.value.trim();
-  const personName = fieldName.value.trim();
-  const mobile = fieldMobile.value.trim();
   const address = fieldAddress.value.trim();
-
-  if (!firmName && !personName && !mobile) {
-    showToast('Add at least a name, firm, or mobile number.');
-    return;
-  }
-
   const now = new Date().toISOString();
 
   if (formMode === 'edit' && editingCardId != null) {
+    const personName = fieldName.value.trim();
+    const mobile = fieldMobile.value.trim();
+    if (!firmName && !personName && !mobile) {
+      showToast('Add at least a name, firm, or mobile number.');
+      return;
+    }
     const existing = await dbGet(editingCardId);
     await dbPut({
       ...existing,
@@ -313,15 +353,30 @@ document.getElementById('btn-save').addEventListener('click', async () => {
     });
     showToast('Card updated');
   } else {
-    await dbAdd({
-      firmName, personName, mobile, address,
-      rawText: rawTextEl.textContent,
-      frontImage: formFrontImage,
-      backImage: formBackImage,
-      createdAt: now,
-      updatedAt: now,
-    });
-    showToast('Card saved');
+    const entries = Array.from(contactsList.querySelectorAll('.contact-row'))
+      .map(row => ({
+        personName: row.querySelector('.contact-name').value.trim(),
+        mobile: row.querySelector('.contact-mobile').value.trim(),
+      }))
+      .filter(e => e.personName || e.mobile);
+
+    if (!firmName && entries.length === 0) {
+      showToast('Add at least a firm name or one person.');
+      return;
+    }
+    if (entries.length === 0) entries.push({ personName: '', mobile: '' });
+
+    for (const entry of entries) {
+      await dbAdd({
+        firmName, personName: entry.personName, mobile: entry.mobile, address,
+        rawText: rawTextEl.textContent,
+        frontImage: formFrontImage,
+        backImage: formBackImage,
+        createdAt: now,
+        updatedAt: now,
+      });
+    }
+    showToast(entries.length > 1 ? `${entries.length} cards saved` : 'Card saved');
   }
 
   showScreen('screen-home');
@@ -394,6 +449,30 @@ function escapeHtml(str) {
 
 document.getElementById('search-input').addEventListener('input', (e) => {
   renderCardList(e.target.value);
+});
+
+// ---------- Export to Excel ----------
+document.getElementById('btn-export').addEventListener('click', async () => {
+  const all = await dbGetAll();
+  if (!all.length) {
+    showToast('No cards to export yet.');
+    return;
+  }
+  all.sort((a, b) => (b.updatedAt || '').localeCompare(a.updatedAt || ''));
+
+  const rows = all.map(c => ({
+    'Firm / Company Name': c.firmName || '',
+    'Name': c.personName || '',
+    'Mobile Number': c.mobile || '',
+    'Address': c.address || '',
+    'Date Added': c.createdAt ? new Date(c.createdAt).toLocaleDateString() : '',
+  }));
+
+  const ws = XLSX.utils.json_to_sheet(rows);
+  ws['!cols'] = [{ wch: 28 }, { wch: 22 }, { wch: 18 }, { wch: 40 }, { wch: 14 }];
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'Business Cards');
+  XLSX.writeFile(wb, `business-cards-${new Date().toISOString().slice(0, 10)}.xlsx`);
 });
 
 // ---------- Init ----------

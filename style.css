@@ -51,6 +51,12 @@ body {
   margin: 0;
   font-weight: 600;
 }
+.topbar-with-actions {
+  justify-content: space-between;
+}
+.topbar-with-actions .icon-btn {
+  margin-left: 0;
+}
 .icon-btn {
   background: none;
   border: none;
@@ -218,6 +224,47 @@ body {
   font-weight: 600;
   cursor: pointer;
   margin-top: 10px;
+}
+
+.secondary-btn {
+  width: 100%;
+  background: #fff;
+  color: var(--brand-dark);
+  border: 1px solid var(--brand);
+  border-radius: var(--radius);
+  padding: 12px;
+  font-size: 15px;
+  font-weight: 600;
+  cursor: pointer;
+  margin-top: 8px;
+}
+
+.contact-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 10px;
+}
+.contact-row .field-input {
+  margin: 0;
+}
+.contact-row .contact-name {
+  flex: 1.2;
+}
+.contact-row .contact-mobile {
+  flex: 1;
+}
+.remove-contact-btn {
+  flex-shrink: 0;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  border: 1px solid var(--border);
+  background: #fff;
+  color: var(--danger);
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
 }
 
 .ocr-progress {

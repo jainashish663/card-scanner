@@ -17,8 +17,9 @@
 
 <!-- HOME -->
 <section id="screen-home" class="screen active">
-  <header class="topbar">
+  <header class="topbar topbar-with-actions">
     <h1>Card Scanner</h1>
+    <button id="btn-export" class="icon-btn" aria-label="Export to Excel" title="Export to Excel">⬇</button>
   </header>
   <div class="content">
     <input id="search-input" class="search-input" type="search" placeholder="Search by name, firm, or number" />
@@ -78,11 +79,19 @@
     <label class="field-label">Firm / Company Name</label>
     <input id="field-firm" class="field-input" type="text" placeholder="e.g. Shree Nakoda Jewels" />
 
-    <label class="field-label">Name</label>
-    <input id="field-name" class="field-input" type="text" placeholder="e.g. Ashish Jain" />
+    <div id="single-contact-fields">
+      <label class="field-label">Name</label>
+      <input id="field-name" class="field-input" type="text" placeholder="e.g. Ashish Jain" />
 
-    <label class="field-label">Mobile Number</label>
-    <input id="field-mobile" class="field-input" type="tel" placeholder="e.g. 98765 43210" />
+      <label class="field-label">Mobile Number</label>
+      <input id="field-mobile" class="field-input" type="tel" placeholder="e.g. 98765 43210" />
+    </div>
+
+    <div id="multi-contact-fields" hidden>
+      <label class="field-label">People</label>
+      <div id="contacts-list"></div>
+      <button id="btn-add-contact" type="button" class="secondary-btn">+ Add another person</button>
+    </div>
 
     <label class="field-label">Address</label>
     <textarea id="field-address" class="field-textarea" rows="4" placeholder="Full address"></textarea>
@@ -100,6 +109,7 @@
 </section>
 
 <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
 <script src="parser.js"></script>
 <script src="app.js"></script>
 </body>

@@ -98,22 +98,16 @@ function extractFirmName(text, usedLines) {
   return '';
 }
 
-function extractPersonName(text, usedLines, mobileCount) {
+// Returns an array of names: usually a single entry, but more than one when
+// several people sharing the card were detected on one merged OCR row.
+function extractPersonNames(text, usedLines, mobileCount) {
   const lines = splitLines(text);
-
-  // Prefer a line with an explicit title (Mr./Dr./Shri etc.)
-  for (const line of lines) {
-    if (usedLines.has(line)) continue;
-    if (NAME_TITLE.test(line) && line.length <= 40) {
-      usedLines.add(line);
-      return line.replace(NAME_TITLE, '').trim();
-    }
-  }
 
   // Multiple people sharing one card (e.g. "ARVIND JAIN AKHIL J. JAIN
   // JITENDRA JAIN") often get OCR'd as one merged row when their columns
   // sit on the same horizontal band. If we already found more than one
-  // mobile number, try splitting this row into that many names.
+  // mobile number, try splitting this row into that many names first —
+  // otherwise the single-name checks below would just reject the row.
   if (mobileCount > 1) {
     for (const line of lines) {
       if (usedLines.has(line)) continue;
@@ -121,9 +115,18 @@ function extractPersonName(text, usedLines, mobileCount) {
         const names = splitMultiName(line, mobileCount);
         if (names) {
           usedLines.add(line);
-          return names.join(', ');
+          return names;
         }
       }
+    }
+  }
+
+  // Prefer a line with an explicit title (Mr./Dr./Shri etc.)
+  for (const line of lines) {
+    if (usedLines.has(line)) continue;
+    if (NAME_TITLE.test(line) && line.length <= 40) {
+      usedLines.add(line);
+      return [line.replace(NAME_TITLE, '').trim()];
     }
   }
 
@@ -133,7 +136,7 @@ function extractPersonName(text, usedLines, mobileCount) {
       const candidate = lines[i - 1];
       if (!usedLines.has(candidate) && isNameLike(candidate)) {
         usedLines.add(candidate);
-        return candidate;
+        return [candidate];
       }
     }
   }
@@ -143,11 +146,11 @@ function extractPersonName(text, usedLines, mobileCount) {
     if (usedLines.has(line)) continue;
     if (isNameLike(line)) {
       usedLines.add(line);
-      return line;
+      return [line];
     }
   }
 
-  return '';
+  return [];
 }
 
 function isNameLike(line) {
@@ -214,14 +217,23 @@ function parseCardText(frontText, backText) {
   });
 
   const firmName = extractFirmName(combined, usedLines);
-  const personName = extractPersonName(combined, usedLines, mobiles.length);
+  const names = extractPersonNames(combined, usedLines, mobiles.length);
   const address = extractAddress(combined, usedLines);
+
+  // One contact row per detected person when names and mobile numbers line
+  // up 1:1 (e.g. three people sharing one firm's card); otherwise a single
+  // row holding everything found, since we can't reliably tell which name
+  // goes with which number.
+  const contacts = (names.length > 1 && names.length === mobiles.length)
+    ? names.map((name, i) => ({ name, mobile: mobiles[i] }))
+    : [{ name: names.join(', '), mobile: mobiles.join(' / ') }];
 
   return {
     firmName,
-    personName,
+    personName: names.join(', '),
     mobile: mobiles.join(' / '),
     address,
+    contacts,
     rawText: combined.trim(),
   };
 }
