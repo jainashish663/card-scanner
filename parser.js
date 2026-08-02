@@ -105,18 +105,17 @@ function extractPersonNames(text, usedLines, mobileCount) {
 
   // Multiple people sharing one card (e.g. "ARVIND JAIN AKHIL J. JAIN
   // JITENDRA JAIN") often get OCR'd as one merged row when their columns
-  // sit on the same horizontal band. If we already found more than one
-  // mobile number, try splitting this row into that many names first —
-  // otherwise the single-name checks below would just reject the row.
-  if (mobileCount > 1) {
-    for (const line of lines) {
-      if (usedLines.has(line)) continue;
-      if (isMultiNameLike(line)) {
-        const names = splitMultiName(line, mobileCount);
-        if (names) {
-          usedLines.add(line);
-          return names;
-        }
+  // sit on the same horizontal band. Try splitting such a row first —
+  // otherwise the single-name checks below would just reject it. This runs
+  // regardless of how many numbers were found, since a misread number
+  // shouldn't cost us the names.
+  for (const line of lines) {
+    if (usedLines.has(line)) continue;
+    if (isMultiNameLike(line)) {
+      const names = splitMultiName(line, mobileCount);
+      if (names && names.length > 1) {
+        usedLines.add(line);
+        return names;
       }
     }
   }
@@ -172,19 +171,26 @@ function isMultiNameLike(line) {
   if (ADDRESS_KEYWORDS.test(line) || INDIAN_STATES.test(line)) return false;
   if (/@/.test(line)) return false;
   const words = line.split(' ').filter(Boolean);
-  if (words.length < 5) return false; // a single name is handled by isNameLike
+  // 4 words is the smallest possible two-person row ("ARVIND JAIN JITENDRA
+  // JAIN"). Rows this short are also valid single names, so splitMultiName
+  // only accepts them when a repeated surname clearly marks the boundary.
+  if (words.length < 4) return false;
   const titleCaseWords = words.filter(w => /^[A-Z][a-zA-Z.]*$/.test(w));
   return titleCaseWords.length >= Math.ceil(words.length * 0.7);
 }
 
-// Splits a merged multi-person row into `count` names, using the number of
-// mobile numbers already found as the expected count. A single-letter
-// initial (e.g. "J.") is glued to the following word before splitting, so
-// "AKHIL J. JAIN" isn't cut in half. Only returns a result when the
-// remaining word count divides evenly — otherwise it's too ambiguous to
-// guess, and the raw text is still visible for the user to fix by hand.
+// Splits a merged multi-person row into individual names. `count` is the
+// number of mobile numbers found, used as a hint for the expected number of
+// people. A single-letter initial (e.g. "J.") is glued to the following word
+// so "AKHIL J. JAIN" isn't cut in half.
+//
+// Two strategies, in order:
+//  1. Shared-surname split — on these cards the family/surname usually
+//     repeats once per person ("ARVIND JAIN | AKHIL J. JAIN | JITENDRA
+//     JAIN"), so cutting after each occurrence recovers the names even when
+//     they don't all have the same word count.
+//  2. Even division — fall back to slicing into `count` equal groups.
 function splitMultiName(line, count) {
-  if (count < 2) return null;
   const tokens = line.split(' ').filter(Boolean);
   const merged = [];
   for (let i = 0; i < tokens.length; i++) {
@@ -195,13 +201,64 @@ function splitMultiName(line, count) {
       merged.push(tokens[i]);
     }
   }
-  if (merged.length < count * 2 || merged.length % count !== 0) return null;
-  const groupSize = merged.length / count;
-  const names = [];
-  for (let i = 0; i < merged.length; i += groupSize) {
-    names.push(merged.slice(i, i + groupSize).join(' '));
+  if (merged.length < 4) return null;
+
+  const bySurname = splitBySharedSurname(merged);
+  if (bySurname && bySurname.length >= 2) return bySurname;
+
+  if (count >= 2 && merged.length >= count * 2 && merged.length % count === 0) {
+    const groupSize = merged.length / count;
+    const names = [];
+    for (let i = 0; i < merged.length; i += groupSize) {
+      names.push(merged.slice(i, i + groupSize).join(' '));
+    }
+    return names;
   }
-  return names;
+
+  return null;
+}
+
+// Finds a surname that repeats at least twice and always sits at a name
+// boundary, then splits after each occurrence. Matching is done on the last
+// word of each token, since initial-gluing can leave a token like "J. JAIN"
+// that still ends the name it belongs to.
+function splitBySharedSurname(tokens) {
+  const lastWord = (t) => {
+    const parts = t.toUpperCase().split(' ').filter(Boolean);
+    return parts[parts.length - 1] || '';
+  };
+
+  const counts = {};
+  tokens.forEach(t => {
+    const key = lastWord(t);
+    counts[key] = (counts[key] || 0) + 1;
+  });
+
+  let surname = null;
+  let best = 1;
+  Object.keys(counts).forEach(key => {
+    if (counts[key] > best) {
+      best = counts[key];
+      surname = key;
+    }
+  });
+  if (!surname || best < 2) return null;
+
+  // The final token must end with the surname, otherwise this isn't a clean
+  // "<given> <surname>" repetition and splitting would truncate a name.
+  if (lastWord(tokens[tokens.length - 1]) !== surname) return null;
+
+  const names = [];
+  let current = [];
+  for (const token of tokens) {
+    current.push(token);
+    if (lastWord(token) === surname) {
+      names.push(current.join(' '));
+      current = [];
+    }
+  }
+  if (current.length) return null; // trailing leftovers — too ambiguous
+  return names.filter(n => n.split(' ').length >= 2);
 }
 
 function parseCardText(frontText, backText) {
@@ -220,13 +277,16 @@ function parseCardText(frontText, backText) {
   const names = extractPersonNames(combined, usedLines, mobiles.length);
   const address = extractAddress(combined, usedLines);
 
-  // One contact row per detected person when names and mobile numbers line
-  // up 1:1 (e.g. three people sharing one firm's card); otherwise a single
-  // row holding everything found, since we can't reliably tell which name
-  // goes with which number.
-  const contacts = (names.length > 1 && names.length === mobiles.length)
-    ? names.map((name, i) => ({ name, mobile: mobiles[i] }))
-    : [{ name: names.join(', '), mobile: mobiles.join(' / ') }];
+  // One contact row per person, so each becomes its own saved card. The row
+  // count is driven by whichever we found more of — names or numbers — and
+  // they're paired up in reading order. Never merge several people into one
+  // row: an unpaired name or number is easier to fix in an otherwise-correct
+  // row than to untangle from a combined blob.
+  const rowCount = Math.max(names.length, mobiles.length, 1);
+  const contacts = [];
+  for (let i = 0; i < rowCount; i++) {
+    contacts.push({ name: names[i] || '', mobile: mobiles[i] || '' });
+  }
 
   return {
     firmName,
