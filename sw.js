@@ -1,4 +1,4 @@
-const CACHE_NAME = 'card-scanner-v7';
+const CACHE_NAME = 'card-scanner-v8';
 const APP_SHELL = [
   './',
   './index.html',

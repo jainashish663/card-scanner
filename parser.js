@@ -27,6 +27,76 @@ function splitLines(text) {
     .filter(Boolean);
 }
 
+// Underscores survive here, unlike splitLines — Instagram handles need them.
+function splitRawLines(text) {
+  return text.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+}
+
+const KNOWN_TLDS = ['com', 'in', 'co', 'net', 'org', 'io', 'info', 'biz', 'edu', 'gov', 'us', 'uk', 'ca', 'au', 'ai', 'me'];
+
+// OCR routinely mangles addresses: it drops the dot in "gmail.com" and slips
+// spaces into the local part ("jain.arvind1 970@..."). Repair both sides of
+// the @ before validating. Merging trailing words back into the domain is
+// capped and only accepted once it ends in a real TLD — otherwise a line
+// like "Follow us @shree.nakoda for new arrivals" (an Instagram mention, not
+// an email) would swallow the rest of the sentence as a fake domain.
+function extractEmail(text) {
+  for (const line of splitRawLines(text)) {
+    if (!line.includes('@')) continue;
+    const stripped = line.replace(/^e[\s\-]*mail\s*[:\-]?\s*/i, '');
+    const at = stripped.indexOf('@');
+    if (at < 0) continue;
+
+    let local = stripped.slice(0, at).replace(/\s+/g, '');
+    const localParts = local.split(/[^A-Za-z0-9._%+-]/).filter(Boolean);
+    local = localParts.length ? localParts[localParts.length - 1] : '';
+    if (!local) continue;
+
+    const afterAt = stripped.slice(at + 1).replace(/\s*\.\s*/g, '.'); // "gmail . com" -> "gmail.com"
+    const words = afterAt.split(/\s+/).filter(Boolean);
+
+    let domain = null;
+    for (let take = 1; take <= Math.min(4, words.length); take++) {
+      const chunk = words.slice(0, take).join('.').replace(/[.,;:'"]+$/, '');
+      const tld = (chunk.split('.').pop() || '').toLowerCase();
+      if (KNOWN_TLDS.includes(tld) && /^[A-Za-z0-9.-]+$/.test(chunk)) {
+        domain = chunk; // keep the longest valid match, e.g. "yahoo.co.in" over "yahoo.co"
+      }
+    }
+    if (!domain) continue;
+
+    const candidate = `${local}@${domain}`.toLowerCase();
+    if (/^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$/.test(candidate)) {
+      return candidate;
+    }
+  }
+  return '';
+}
+
+// Handles can't contain spaces, so a space inside one is an OCR misread of
+// an underscore ("shree Nakoda_Jewels" -> "shree_Nakoda_Jewels").
+function extractInstagram(text) {
+  const LABEL = /\b(instagram|insta|ig)\b\s*[:\-@]?\s*/i;
+  for (const line of splitRawLines(text)) {
+    if (!LABEL.test(line)) continue;
+    let handle = line.replace(new RegExp('^.*?' + LABEL.source, 'i'), '');
+    handle = handle
+      .replace(/^[@\s:\-]+/, '')
+      .replace(/["'`.,;]+$/, '')
+      .trim()
+      .replace(/\s+/g, '_');
+    if (/^[A-Za-z0-9._]{2,40}$/.test(handle)) return handle;
+  }
+
+  // No label — fall back to a bare @handle that isn't an email address.
+  for (const line of splitRawLines(text)) {
+    if (line.includes('@') && /\.[A-Za-z]{2,}/.test(line)) continue; // looks like an email
+    const m = line.match(/(?:^|\s)@([A-Za-z0-9._]{2,40})\b/);
+    if (m) return m[1];
+  }
+  return '';
+}
+
 function extractMobileNumbers(text) {
   const lines = splitLines(text);
   const found = [];
@@ -299,6 +369,14 @@ function parseCardText(frontText, backText) {
     }
   });
 
+  // Pulled from the raw text before line-normalisation, and marked used so
+  // they can't be mistaken for names or address lines.
+  const email = extractEmail(combined);
+  const instagram = extractInstagram(combined);
+  splitLines(combined).forEach(line => {
+    if (/@/.test(line) || /\b(instagram|insta|ig)\b/i.test(line)) usedLines.add(line);
+  });
+
   const firmName = extractFirmName(combined, usedLines);
   const names = extractPersonNames(combined, usedLines, mobiles.length);
   const address = extractAddress(combined, usedLines);
@@ -324,6 +402,8 @@ function parseCardText(frontText, backText) {
     personName: names.join(', '),
     mobile: mobiles.join(' / '),
     address,
+    email,
+    instagram,
     contacts,
     rawText: combined.trim(),
   };
