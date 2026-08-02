@@ -184,22 +184,38 @@ function friendlyStatus(status) {
   return map[status] || status;
 }
 
+function withTimeout(promise, ms, message) {
+  let timer;
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new Error(message)), ms);
+  });
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+}
+
 async function getWorker() {
   if (!ocrWorker) {
-    ocrWorker = await Tesseract.createWorker('eng', 1, {
-      logger: (m) => {
-        if (typeof m.progress === 'number') {
-          setProgress(m.progress, friendlyStatus(m.status));
-        }
-      },
-    });
+    ocrWorker = await withTimeout(
+      Tesseract.createWorker('eng', 1, {
+        logger: (m) => {
+          if (typeof m.progress === 'number') {
+            setProgress(m.progress, friendlyStatus(m.status));
+          }
+        },
+      }),
+      60000,
+      'Timed out starting the OCR engine. Check your internet connection and try again.'
+    );
   }
   return ocrWorker;
 }
 
 async function runOcr(dataUrl) {
   const worker = await getWorker();
-  const { data } = await worker.recognize(dataUrl);
+  const { data } = await withTimeout(
+    worker.recognize(dataUrl),
+    60000,
+    'Timed out reading the card. Try again with a clearer photo.'
+  );
   return data.text || '';
 }
 
@@ -207,7 +223,7 @@ btnExtract.addEventListener('click', async () => {
   if (!frontDataUrl) return;
   btnExtract.disabled = true;
   document.getElementById('ocr-progress').hidden = false;
-  setProgress(0, 'Preparing…');
+  setProgress(0, ocrWorker ? 'Preparing…' : 'Downloading OCR engine (~5MB, first time only)…');
 
   try {
     const frontText = await runOcr(frontDataUrl);
@@ -219,7 +235,7 @@ btnExtract.addEventListener('click', async () => {
     openFormScreen({ mode: 'new', parsed, front: frontDataUrl, back: backDataUrl });
   } catch (err) {
     console.error(err);
-    showToast('OCR failed — check your connection and try again.');
+    showToast(err && err.message ? err.message : 'OCR failed — check your connection and try again.');
   } finally {
     btnExtract.disabled = false;
     document.getElementById('ocr-progress').hidden = true;
