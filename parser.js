@@ -96,7 +96,12 @@ function extractCityState(address) {
   // address segment rather than swallowing the whole line.
   if (!city) {
     const m = address.match(/([A-Za-z][A-Za-z\s]{1,25})[\s,-]+\d{6}\b/);
-    if (m) city = titleCase(m[1]);
+    if (m) {
+      const candidate = m[1].trim();
+      // "Pin Code - 416416" / "Pin: 416416" — the words before the digits
+      // are a label, not the city.
+      if (!/^(pin\s*code|pin|pincode)$/i.test(candidate)) city = titleCase(candidate);
+    }
   }
 
   if (!state && city && CITY_TO_STATE[city.toLowerCase()]) {
@@ -208,11 +213,12 @@ function extractMobileNumbers(text) {
     }
   }
 
-  // Pass 2: fallback — any 10-digit run starting 6-9 anywhere in the text
-  if (found.length === 0) {
-    const matches = text.match(/(?:\+?91[\s\-]?)?[6-9]\d{9}\b/g) || [];
-    matches.forEach(pushIfValid);
-  }
+  // Pass 2: any bare 10-digit mobile anywhere in the text. Runs even when
+  // pass 1 found something — on multi-person cards only the first column
+  // may carry a "Mob:" label while the others are bare numbers, and those
+  // must not be dropped. pushIfValid dedupes against pass 1.
+  const matches = text.match(/(?:\+?91[\s\-]?)?[6-9]\d{9}\b/g) || [];
+  matches.forEach(pushIfValid);
 
   return found;
 }
@@ -335,6 +341,7 @@ function isNameLike(line) {
   if (/\d/.test(line)) return false;
   if (FIRM_KEYWORDS.test(line)) return false;
   if (DESCRIPTOR_WORDS.test(line)) return false;
+  if (DESIGNATION_KEYWORDS.test(line)) return false; // "Sales Manager" is a role, not a person
   if (ADDRESS_KEYWORDS.test(line) || INDIAN_STATES.test(line)) return false;
   if (/@/.test(line)) return false;
   const words = line.split(' ').filter(Boolean);

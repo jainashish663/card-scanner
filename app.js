@@ -202,8 +202,15 @@ document.getElementById('btn-new-scan').addEventListener('click', () => {
 frontInput.addEventListener('change', async () => {
   const file = frontInput.files[0];
   if (!file) return;
-  frontDataUrl = await compressImageFile(file);
-  frontOcrUrl = await preprocessForOcr(file);
+  try {
+    frontDataUrl = await compressImageFile(file);
+    frontOcrUrl = await preprocessForOcr(file);
+  } catch (err) {
+    console.error(err);
+    frontInput.value = '';
+    showToast('Could not read that photo — please try taking it again.');
+    return;
+  }
   frontPreview.src = frontDataUrl;
   frontPreview.hidden = false;
   document.getElementById('front-box').querySelector('.capture-placeholder').hidden = true;
@@ -213,8 +220,15 @@ frontInput.addEventListener('change', async () => {
 backInput.addEventListener('change', async () => {
   const file = backInput.files[0];
   if (!file) return;
-  backDataUrl = await compressImageFile(file);
-  backOcrUrl = await preprocessForOcr(file);
+  try {
+    backDataUrl = await compressImageFile(file);
+    backOcrUrl = await preprocessForOcr(file);
+  } catch (err) {
+    console.error(err);
+    backInput.value = '';
+    showToast('Could not read that photo — please try taking it again.');
+    return;
+  }
   backPreview.src = backDataUrl;
   backPreview.hidden = false;
   document.getElementById('back-box').querySelector('.capture-placeholder').hidden = true;
@@ -279,6 +293,10 @@ async function runOcr(dataUrl) {
 
 btnExtract.addEventListener('click', async () => {
   if (!frontDataUrl) return;
+  if (typeof Tesseract === 'undefined') {
+    showToast('OCR engine is not loaded — connect to the internet and reload the app once.');
+    return;
+  }
   btnExtract.disabled = true;
   document.getElementById('ocr-progress').hidden = false;
   setProgress(0, ocrWorker ? 'Preparing…' : 'Downloading OCR engine (~5MB, first time only)…');
@@ -468,13 +486,19 @@ async function renderCardList(filter = '') {
   const q = filter.trim().toLowerCase();
   const filtered = q
     ? all.filter(c =>
-        (c.firmName || '').toLowerCase().includes(q) ||
-        (c.personName || '').toLowerCase().includes(q) ||
-        (c.mobile || '').toLowerCase().includes(q))
+        ['firmName', 'personName', 'mobile', 'address', 'city', 'state', 'email', 'instagram']
+          .some(k => (c[k] || '').toLowerCase().includes(q)))
     : all;
 
   cardListEl.innerHTML = '';
-  emptyStateEl.hidden = all.length > 0;
+  emptyStateEl.hidden = filtered.length > 0;
+  if (filtered.length === 0) {
+    const noneSaved = all.length === 0;
+    document.getElementById('empty-title').textContent =
+      noneSaved ? 'No cards saved yet.' : 'No cards match your search.';
+    document.getElementById('empty-sub').textContent =
+      noneSaved ? 'Tap "Scan New Card" to get started.' : 'Try a different name, firm, number, or city.';
+  }
 
   filtered.forEach(card => {
     const li = document.createElement('li');
@@ -522,6 +546,10 @@ document.getElementById('search-input').addEventListener('input', (e) => {
 
 // ---------- Export to Excel ----------
 document.getElementById('btn-export').addEventListener('click', async () => {
+  if (typeof XLSX === 'undefined') {
+    showToast('Export needs its library — connect to the internet and reload the app once.');
+    return;
+  }
   const all = await dbGetAll();
   if (!all.length) {
     showToast('No cards to export yet.');
